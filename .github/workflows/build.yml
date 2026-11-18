@@ -13,42 +13,570 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Fix folder paths automatically
-        run: |
-          mkdir -p app/src/main/java/com/olx/automator
-          if [ -f "app/src/main/app/src/main/java/com/olx/automator/MainActivity.java" ]; then
-            mv app/src/main/app/src/main/java/com/olx/automator/MainActivity.java app/src/main/java/com/olx/automator/MainActivity.java
-            rm -rf app/src/main/app
-          fi
-
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Generate root Gradle config automatically
+      - name: Prepare all project files automatically
         run: |
-          echo "rootProject.name = 'OLXAutomator'" > settings.gradle
-          echo "include ':app'" >> settings.gradle
-          cat << 'EOF' > build.gradle
-          buildscript {
+          rm -rf app build.gradle settings.gradle gradle.properties
+          mkdir -p app/src/main/java/com/olx/automator
+
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
               repositories {
                   google()
                   mavenCentral()
-              }
-              dependencies {
-                  classpath 'com.android.tools.build:gradle:8.2.2'
+                  gradlePluginPortal()
               }
           }
-          allprojects {
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
               repositories {
                   google()
                   mavenCentral()
+              }
+          }
+          rootProject.name = "OLXAutomator"
+          include ':app'
+          EOF
+
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'com.android.application' version '8.2.2' apply false
+          }
+          EOF
+
+          echo "android.useAndroidX=true" > gradle.properties
+
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.olx.automator'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.olx.automator"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+
+              buildTypes {
+                  debug {
+                      minifyEnabled false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+
+          dependencies {
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@android:drawable/sym_def_app_icon"
+                  android:label="OLX Помощник"
+                  android:usesCleartextTraffic="true"
+                  android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:configChanges="orientation|screenSize|keyboardHidden"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+
+          </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/olx/automator/MainActivity.java
+          package com.olx.automator;
+
+          import android.annotation.SuppressLint;
+          import android.app.Activity;
+          import android.content.Context;
+          import android.content.SharedPreferences;
+          import android.graphics.Color;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.text.InputType;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.view.WindowManager;
+          import android.webkit.CookieManager;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.Button;
+          import android.widget.EditText;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          import org.json.JSONArray;
+
+          import java.net.URLEncoder;
+          import java.util.ArrayList;
+          import java.util.HashSet;
+          import java.util.List;
+          import java.util.Random;
+          import java.util.Set;
+
+          public class MainActivity extends Activity {
+
+              private WebView webView;
+              private EditText etQuery;
+              private EditText etMessage;
+              private TextView tvStatus;
+              private Button btnStart;
+              private Button btnStop;
+              private Button btnTogglePanel;
+              private LinearLayout settingsContainer;
+
+              private boolean isRunning = false;
+              private int currentPage = 1;
+              private int sentCount = 0;
+
+              private final List<String> adQueue = new ArrayList<>();
+              private String currentAdUrl = "";
+
+              private enum State { IDLE, LOADING_SEARCH, LOADING_AD, WAITING_NEXT }
+              private State currentState = State.IDLE;
+
+              private final Handler handler = new Handler(Looper.getMainLooper());
+              private final Random random = new Random();
+              private SharedPreferences prefs;
+              private Set<String> visitedAds;
+
+              private static final String DEFAULT_MESSAGE =
+                      "Здравствуйте, меня зовут Мирас. Я программист, более 7 лет занимаюсь на удалёнке, " +
+                      "помогаю людям восстанавливать файлы, а также настройка принтеров, активация офисов, " +
+                      "экселей, а также удаление вирусов и установка антивирусов и так далее. " +
+                      "Чем могу вам помочь? Возможно, вам нужно какие-то проблемы решить. " +
+                      "Если что, пишите, можем обсудить онлайн за договорную сумму. " +
+                      "После работы оплата производится. Мой номер телефона: 8 771 608 04 17. " +
+                      "Мирас, с уважением.";
+
+              @SuppressLint("SetJavaScriptEnabled")
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+                  prefs = getSharedPreferences("olx_bot_prefs", Context.MODE_PRIVATE);
+                  visitedAds = new HashSet<>(prefs.getStringSet("visited_urls", new HashSet<>()));
+
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setBackgroundColor(Color.parseColor("#F2F4F5"));
+
+                  settingsContainer = new LinearLayout(this);
+                  settingsContainer.setOrientation(LinearLayout.VERTICAL);
+                  settingsContainer.setPadding(24, 20, 24, 12);
+                  settingsContainer.setBackgroundColor(Color.parseColor("#FFFFFF"));
+
+                  etQuery = new EditText(this);
+                  etQuery.setHint("Кого ищем? (например: бухгалтер)");
+                  etQuery.setText(prefs.getString("saved_query", "бухгалтер"));
+                  etQuery.setSingleLine(true);
+                  settingsContainer.addView(etQuery);
+
+                  etMessage = new EditText(this);
+                  etMessage.setHint("Текст сообщения...");
+                  etMessage.setText(prefs.getString("saved_message", DEFAULT_MESSAGE));
+                  etMessage.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+                  etMessage.setLines(3);
+                  etMessage.setMaxLines(4);
+                  etMessage.setGravity(Gravity.TOP | Gravity.START);
+                  settingsContainer.addView(etMessage);
+
+                  root.addView(settingsContainer);
+
+                  LinearLayout controlsRow = new LinearLayout(this);
+                  controlsRow.setOrientation(LinearLayout.HORIZONTAL);
+                  controlsRow.setPadding(24, 8, 24, 8);
+                  controlsRow.setBackgroundColor(Color.parseColor("#E8ECEF"));
+
+                  LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(
+                          0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
+                  btnParams.setMargins(6, 0, 6, 0);
+
+                  btnStart = new Button(this);
+                  btnStart.setText("СТАРТ");
+                  btnStart.setBackgroundColor(Color.parseColor("#23E5DB"));
+                  btnStart.setTextColor(Color.parseColor("#002F34"));
+                  btnStart.setLayoutParams(btnParams);
+
+                  btnStop = new Button(this);
+                  btnStop.setText("СТОП");
+                  btnStop.setBackgroundColor(Color.parseColor("#FF5636"));
+                  btnStop.setTextColor(Color.WHITE);
+                  btnStop.setEnabled(false);
+                  btnStop.setLayoutParams(btnParams);
+
+                  btnTogglePanel = new Button(this);
+                  btnTogglePanel.setText("Поля ▲");
+                  btnTogglePanel.setLayoutParams(btnParams);
+
+                  controlsRow.addView(btnStart);
+                  controlsRow.addView(btnStop);
+                  controlsRow.addView(btnTogglePanel);
+                  root.addView(controlsRow);
+
+                  tvStatus = new TextView(this);
+                  tvStatus.setText("1. Войдите в аккаунт OLX ниже. 2. Нажмите СТАРТ.");
+                  tvStatus.setPadding(24, 12, 24, 12);
+                  tvStatus.setBackgroundColor(Color.parseColor("#002F34"));
+                  tvStatus.setTextColor(Color.WHITE);
+                  tvStatus.setTextSize(13f);
+                  root.addView(tvStatus);
+
+                  webView = new WebView(this);
+                  LinearLayout.LayoutParams webParams = new LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f);
+                  webView.setLayoutParams(webParams);
+
+                  WebSettings ws = webView.getSettings();
+                  ws.setJavaScriptEnabled(true);
+                  ws.setDomStorageEnabled(true);
+                  ws.setDatabaseEnabled(true);
+                  ws.setUserAgentString("Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
+
+                  CookieManager cm = CookieManager.getInstance();
+                  cm.setAcceptCookie(true);
+                  cm.setAcceptThirdPartyCookies(webView, true);
+
+                  webView.addJavascriptInterface(new WebAppInterface(), "AndroidBridge");
+                  webView.setWebChromeClient(new WebChromeClient());
+                  webView.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                          String url = request.getUrl().toString();
+                          if (url.startsWith("http://") || url.startsWith("https://")) {
+                              return false;
+                          }
+                          return true;
+                      }
+
+                      @Override
+                      public void onPageFinished(WebView view, String url) {
+                          super.onPageFinished(view, url);
+                          CookieManager.getInstance().flush();
+                          if (!isRunning) return;
+
+                          if (currentState == State.LOADING_SEARCH) {
+                              updateStatus("Сканирую организации на стр. " + currentPage + "...");
+                              handler.postDelayed(() -> injectSearchScanner(), 3500);
+                          } else if (currentState == State.LOADING_AD) {
+                              updateStatus("Открыта анкета. Ищу кнопку сообщения...");
+                              handler.postDelayed(() -> injectHumanTyper(), 4000);
+                          }
+                      }
+                  });
+
+                  root.addView(webView);
+                  setContentView(root);
+
+                  btnTogglePanel.setOnClickListener(v -> {
+                      if (settingsContainer.getVisibility() == View.VISIBLE) {
+                          settingsContainer.setVisibility(View.GONE);
+                          btnTogglePanel.setText("Поля ▼");
+                      } else {
+                          settingsContainer.setVisibility(View.VISIBLE);
+                          btnTogglePanel.setText("Поля ▲");
+                      }
+                  });
+
+                  btnStart.setOnClickListener(v -> startBot());
+                  btnStop.setOnClickListener(v -> stopBot("Остановлено пользователем."));
+
+                  webView.loadUrl("https://www.olx.kz/myaccount/");
+              }
+
+              private void startBot() {
+                  String query = etQuery.getText().toString().trim();
+                  String msg = etMessage.getText().toString().trim();
+
+                  if (query.isEmpty() || msg.isEmpty()) {
+                      updateStatus("Ошибка: заполните поисковый запрос и текст сообщения!");
+                      return;
+                  }
+
+                  prefs.edit()
+                          .putString("saved_query", query)
+                          .putString("saved_message", msg)
+                          .apply();
+
+                  isRunning = true;
+                  currentPage = 1;
+                  adQueue.clear();
+
+                  btnStart.setEnabled(false);
+                  btnStop.setEnabled(true);
+                  settingsContainer.setVisibility(View.GONE);
+                  btnTogglePanel.setText("Поля ▼");
+
+                  loadSearchPage();
+              }
+
+              private void stopBot(String reason) {
+                  isRunning = false;
+                  currentState = State.IDLE;
+                  handler.removeCallbacksAndMessages(null);
+                  btnStart.setEnabled(true);
+                  btnStop.setEnabled(false);
+                  updateStatus(reason + " (Отправлено за сессию: " + sentCount + ")");
+              }
+
+              private void loadSearchPage() {
+                  if (!isRunning) return;
+                  currentState = State.LOADING_SEARCH;
+                  try {
+                      String q = URLEncoder.encode(etQuery.getText().toString().trim(), "UTF-8");
+                      String searchUrl = "https://www.olx.kz/list/q-" + q + "/?page=" + currentPage;
+                      updateStatus("Поиск по РК: стр. " + currentPage + "...");
+                      webView.loadUrl(searchUrl);
+                  } catch (Exception e) {
+                      stopBot("Ошибка формирования ссылки");
+                  }
+              }
+
+              private void processNextAdInQueue() {
+                  if (!isRunning) return;
+
+                  while (!adQueue.isEmpty()) {
+                      String candidate = adQueue.remove(0);
+                      String cleanUrl = candidate.split("\\?")[0];
+                      if (!visitedAds.contains(cleanUrl)) {
+                          currentAdUrl = cleanUrl;
+                          currentState = State.LOADING_AD;
+                          updateStatus("Переход к организации (в очереди: " + adQueue.size() + ")...");
+                          webView.loadUrl(cleanUrl);
+                          return;
+                      }
+                  }
+
+                  currentPage++;
+                  if (currentPage > 25) {
+                      stopBot("Обход всех 25 страниц поиска завершён!");
+                      return;
+                  }
+                  int pagePause = 5000 + random.nextInt(4000);
+                  updateStatus("Страница " + (currentPage - 1) + " пройдена. Переход на стр. " + currentPage + "...");
+                  handler.postDelayed(this::loadSearchPage, pagePause);
+              }
+
+              private void injectSearchScanner() {
+                  if (!isRunning) return;
+                  String js = "(function() {" +
+                          "window.scrollTo({top: document.body.scrollHeight / 2, behavior: 'smooth'});" +
+                          "setTimeout(function() {" +
+                          "  window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'});" +
+                          "  setTimeout(function() {" +
+                          "    var anchors = document.querySelectorAll('a[href*=\"/d/obyavlenie/\"]');" +
+                          "    var list = [];" +
+                          "    for (var i = 0; i < anchors.length; i++) {" +
+                          "      var h = anchors[i].href.split('?')[0];" +
+                          "      if (h && list.indexOf(h) === -1) list.push(h);" +
+                          "    }" +
+                          "    AndroidBridge.onAdsCollected(JSON.stringify(list));" +
+                          "  }, 2000);" +
+                          "}, 1500);" +
+                          "})();";
+                  webView.evaluateJavascript(js, null);
+              }
+
+              private void injectHumanTyper() {
+                  if (!isRunning) return;
+                  String rawMsg = etMessage.getText().toString().trim()
+                          .replace("\\", "\\\\")
+                          .replace("\"", "\\\"")
+                          .replace("\n", "\\n")
+                          .replace("\r", "");
+
+                  String js = "(function() {" +
+                          "var msgText = \"" + rawMsg + "\";" +
+                          "function findMessageBtn() {" +
+                          "  var btns = document.querySelectorAll('button, a');" +
+                          "  for (var i = 0; i < btns.length; i++) {" +
+                          "    var t = (btns[i].innerText || '').toLowerCase();" +
+                          "    var cy = btns[i].getAttribute('data-cy') || '';" +
+                          "    if (cy === 'ad-contact-message-button' || t.indexOf('сообщение') !== -1 || t.indexOf('написать') !== -1) {" +
+                          "      return btns[i];" +
+                          "    }" +
+                          "  }" +
+                          "  return null;" +
+                          "}" +
+                          "function setNativeValue(el, val) {" +
+                          "  var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;" +
+                          "  if (setter) { setter.call(el, val); } else { el.value = val; }" +
+                          "  el.dispatchEvent(new Event('input', { bubbles: true }));" +
+                          "}" +
+                          "function startTyping() {" +
+                          "  var ta = document.querySelector('textarea[name=\"message\"], textarea');" +
+                          "  if (!ta) {" +
+                          "    AndroidBridge.onSkipAd('Поле сообщения недоступно');" +
+                          "    return;" +
+                          "  }" +
+                          "  ta.focus();" +
+                          "  var idx = 0;" +
+                          "  var currentStr = '';" +
+                          "  AndroidBridge.onLog('Печатаю текст как реальный человек...');" +
+                          "  function typeNextChar() {" +
+                          "    if (idx < msgText.length) {" +
+                          "      currentStr += msgText.charAt(idx);" +
+                          "      setNativeValue(ta, currentStr);" +
+                          "      idx++;" +
+                          "      var delay = Math.floor(Math.random() * 115) + 65;" +
+                          "      if (msgText.charAt(idx - 1) === ' ' || msgText.charAt(idx - 1) === '.') {" +
+                          "        delay += Math.floor(Math.random() * 350) + 150;" +
+                          "      }" +
+                          "      setTimeout(typeNextChar, delay);" +
+                          "    } else {" +
+                          "      setTimeout(clickSend, 1200);" +
+                          "    }" +
+                          "  }" +
+                          "  typeNextChar();" +
+                          "}" +
+                          "function clickSend() {" +
+                          "  var sendBtn = document.querySelector('button[type=\"submit\"], button[data-cy=\"send-message-button\"]');" +
+                          "  if (!sendBtn) {" +
+                          "    var allBtns = document.querySelectorAll('button');" +
+                          "    for (var j = 0; j < allBtns.length; j++) {" +
+                          "      var bt = (allBtns[j].innerText || '').toLowerCase();" +
+                          "      if (bt.indexOf('отправить') !== -1) { sendBtn = allBtns[j]; break; }" +
+                          "    }" +
+                          "  }" +
+                          "  if (sendBtn && !sendBtn.disabled) {" +
+                          "    sendBtn.click();" +
+                          "    setTimeout(function() { AndroidBridge.onMessageSentSuccess(); }, 2500);" +
+                          "  } else {" +
+                          "    AndroidBridge.onSkipAd('Кнопка отправки не найдена');" +
+                          "  }" +
+                          "}" +
+                          "var existingTa = document.querySelector('textarea[name=\"message\"], textarea');" +
+                          "if (existingTa) {" +
+                          "  startTyping();" +
+                          "} else {" +
+                          "  var mBtn = findMessageBtn();" +
+                          "  if (mBtn) {" +
+                          "    mBtn.scrollIntoView({behavior: 'smooth', block: 'center'});" +
+                          "    setTimeout(function() {" +
+                          "      mBtn.click();" +
+                          "      setTimeout(startTyping, 3000);" +
+                          "    }, 1200);" +
+                          "  } else {" +
+                          "    AndroidBridge.onSkipAd('У организации скрыты сообщения');" +
+                          "  }" +
+                          "}" +
+                          "})();";
+
+                  webView.evaluateJavascript(js, null);
+              }
+
+              private void markCurrentAdVisited() {
+                  if (!currentAdUrl.isEmpty()) {
+                      visitedAds.add(currentAdUrl);
+                      prefs.edit().putStringSet("visited_urls", new HashSet<>(visitedAds)).apply();
+                  }
+              }
+
+              private void scheduleNextWithHumanPause(int minSec, int maxSec, String prefix) {
+                  if (!isRunning) return;
+                  currentState = State.WAITING_NEXT;
+                  int waitSeconds = minSec + random.nextInt(maxSec - minSec + 1);
+                  runCountdown(waitSeconds, prefix);
+              }
+
+              private void runCountdown(int secondsLeft, String prefix) {
+                  if (!isRunning) return;
+                  if (secondsLeft <= 0) {
+                      processNextAdInQueue();
+                      return;
+                  }
+                  updateStatus(prefix + " | Пауза анти-бан: " + secondsLeft + " сек. (Отправлено: " + sentCount + ")");
+                  handler.postDelayed(() -> runCountdown(secondsLeft - 1, prefix), 1000);
+              }
+
+              private void updateStatus(String text) {
+                  handler.post(() -> tvStatus.setText(text));
+              }
+
+              private class WebAppInterface {
+                  @JavascriptInterface
+                  public void onAdsCollected(String jsonArray) {
+                      handler.post(() -> {
+                          if (!isRunning) return;
+                          try {
+                              JSONArray arr = new JSONArray(jsonArray);
+                              int added = 0;
+                              for (int i = 0; i < arr.length(); i++) {
+                                  String url = arr.getString(i);
+                                  if (!visitedAds.contains(url) && !adQueue.contains(url)) {
+                                      adQueue.add(url);
+                                      added++;
+                                  }
+                              }
+                              updateStatus("Найдено новых организаций на стр. " + currentPage + ": " + added);
+                              handler.postDelayed(() -> processNextAdInQueue(), 2000);
+                          } catch (Exception e) {
+                              stopBot("Ошибка чтения списка объявлений");
+                          }
+                      });
+                  }
+
+                  @JavascriptInterface
+                  public void onMessageSentSuccess() {
+                      handler.post(() -> {
+                          if (!isRunning) return;
+                          markCurrentAdVisited();
+                          sentCount++;
+                          scheduleNextWithHumanPause(25, 50, "Сообщение отправлено!");
+                      });
+                  }
+
+                  @JavascriptInterface
+                  public void onSkipAd(String reason) {
+                      handler.post(() -> {
+                          if (!isRunning) return;
+                          markCurrentAdVisited();
+                          scheduleNextWithHumanPause(5, 9, "Пропуск (" + reason + ")");
+                      });
+                  }
+
+                  @JavascriptInterface
+                  public void onLog(String msg) {
+                      updateStatus(msg + " (Отправлено: " + sentCount + ")");
+                  }
               }
           }
           EOF
-          echo "android.useAndroidX=true" > gradle.properties
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
